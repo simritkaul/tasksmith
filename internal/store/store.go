@@ -82,12 +82,12 @@ type RunWithConfig struct {
 	Config json.RawMessage;
 };
 
-func (s *Store) GetRunConfig(ctx context.Context, runId uuid.UUID, jobDefId uuid.UUID, config json.RawMessage) (RunWithConfig, error) {
+func (s *Store) GetRunConfig(ctx context.Context, runId uuid.UUID) (RunWithConfig, error) {
 	var rc RunWithConfig;
 	err := s.db.QueryRowContext(ctx,
 		`SELECT jr.id, jr.job_definition_id, jd.config
 		 FROM job_runs jr
-		 JOIN job_definition jd 
+		 JOIN job_definitions jd 
 		 ON jr.job_definition_id = jd.id
 		 WHERE jr.id = $1`,
 		 runId,
