@@ -55,6 +55,7 @@ type JobDefinition struct {
 	Enabled bool;
 }
 
+// CreateJobDefinition inserts a new job_definitions row
 func (s *Store) CreateJobDefinition(ctx context.Context, name string, cronSchedule string, config json.RawMessage) (JobDefinition, error) {
 	id := uuid.New();
 	_, err := s.db.ExecContext(ctx,
@@ -82,7 +83,8 @@ type RunWithConfig struct {
 	Config json.RawMessage;
 };
 
-func (s *Store) GetRunConfig(ctx context.Context, runId uuid.UUID) (RunWithConfig, error) {
+// GetRunConfig gets the latest job details for a given runID
+func (s *Store) GetRunConfig(ctx context.Context, runID uuid.UUID) (RunWithConfig, error) {
 	var rc RunWithConfig;
 	err := s.db.QueryRowContext(ctx,
 		`SELECT jr.id, jr.job_definition_id, jd.config
@@ -90,11 +92,124 @@ func (s *Store) GetRunConfig(ctx context.Context, runId uuid.UUID) (RunWithConfi
 		 JOIN job_definitions jd 
 		 ON jr.job_definition_id = jd.id
 		 WHERE jr.id = $1`,
-		 runId,
+		 runID,
 	).Scan(&rc.RunID, &rc.JobDefinitionID, &rc.Config);
 	if err != nil {
 		return RunWithConfig{}, fmt.Errorf("get run config: %w", err);
 	}
 
 	return rc, nil;
+}
+
+// MarkRunStarted marks the job with the given runID as running
+func (s *Store) MarkRunStarted(ctx context.Context, runID uuid.UUID) error {
+	res, err := s.db.ExecContext(ctx,
+		`UPDATE job_runs
+		 SET status = 'running', 
+		 started_at = now(), 
+		 attempt_count = attempt_count + 1, 
+		 next_retry_at = NULL
+		 WHERE id = $1`,
+		runID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("mark run started: %w", err);
+	}
+
+	rows, err := res.RowsAffected();
+
+	if err != nil {
+		return fmt.Errorf("mark run started: checking rows affected: %w", err);
+	}
+
+	if rows != 1 {
+		return fmt.Errorf("mark run started: expected 1 row affected, got %d (run %s not found?)", rows, runID);
+	}
+
+	return nil;
+}
+
+// MarkRunSucceeded marks the job with the given runID as succeeded
+func (s *Store) MarkRunSucceeded(ctx context.Context, runID uuid.UUID) error {
+	res, err := s.db.ExecContext(ctx, 
+		`UPDATE job_runs 
+		 SET status = 'succeeded', completed_at = now()
+		 WHERE id = $1`,
+		 runID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("mark run succeeded: %w", err);
+	}
+
+	rows, err := res.RowsAffected();
+
+	if err != nil {
+		return fmt.Errorf("mark run succeeded: checking rows affected: %w", err);
+	}
+
+	if rows != 1 {
+		return fmt.Errorf("mark run succeeded: expected 1 row affected, got %d (run %s not found?)", rows, runID);
+	}
+
+	return nil;
+}
+
+// MarkRunFailedRetrying marks the job with the given runID as pending and sets the next run at for the retry
+func (s *Store) MarkRunFailedRetrying(ctx context.Context, runID uuid.UUID, nextRunAt time.Time, errMsg string) error {
+	res, err := s.db.ExecContext(ctx, 
+		`UPDATE job_runs 
+		 SET status = 'pending', next_retry_at = $1, last_error = $2
+		 WHERE id = $3`,
+		 nextRunAt,
+		 errMsg,
+		 runID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("mark run failed retrying: %w", err);
+	}
+
+	rows, err := res.RowsAffected();
+
+	if err != nil {
+		return fmt.Errorf("mark run failed retrying: checking rows affected: %w", err);
+	}
+
+	if rows != 1 {
+		return fmt.Errorf("mark run failed retrying: expected 1 row affected, got %d (run %s not found?)", rows, runID);
+	}
+
+	return nil;
+}
+
+// MarkRunFailedFinal marks the job with the given runID as failed
+func (s *Store) MarkRunFailedFinal(ctx context.Context, runID uuid.UUID, errMsg string) error {
+	res, err := s.db.ExecContext(ctx, 
+		`UPDATE job_runs 
+		 SET status = 'failed', 
+		 completed_at = now(),
+		 next_retry_at = NULL, 
+		 last_error = $1
+		 WHERE id = $2`,
+		 errMsg,
+		 runID,
+	)
+
+	if err != nil {
+		return fmt.Errorf("mark run failed final: %w", err);
+	}
+
+	rows, err := res.RowsAffected();
+
+	if err != nil {
+		return fmt.Errorf("mark run failed final: checking rows affected: %w", err);
+	}
+
+	if rows != 1 {
+		return fmt.Errorf("mark run failed final: expected 1 row affected, got %d (run %s not found?)", rows, runID);
+	}
+
+	return nil;
 }
