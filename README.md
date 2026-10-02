@@ -57,6 +57,11 @@ TaskSmith never calls QueueForge directly — all access goes through a
 QueueForge library; a future networked/multi-process QueueForge could be
 swapped in later without touching scheduler or worker code.
 
+> **Phase 0 debt:** QueueForge currently has no redelivery-count tracking and
+> no dead-letter mechanism. A poison message that keeps failing will continue
+> to be picked by the worker until it is manually repaired or the queue is
+> reset. This is an explicit Phase 0 limitation, not a later-phase claim.
+
 ## Tech stack
 
 - Go
