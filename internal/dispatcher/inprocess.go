@@ -7,7 +7,7 @@ import (
 )
 
 type InProcessDispatcher struct {
-	qf *queue.Queue;
+	qf *queue.Queue
 }
 
 var _ Dispatcher = (*InProcessDispatcher)(nil)
@@ -19,25 +19,25 @@ func NewInprocessDispatcher(qf *queue.Queue) *InProcessDispatcher {
 }
 
 func (ipd *InProcessDispatcher) Enqueue(payload string) (string, error) {
-	return ipd.qf.Enqueue(payload);
+	return ipd.qf.Enqueue(payload)
 }
 
 func (ipd *InProcessDispatcher) Dequeue() (*Job, error) {
-	queueJob, err := ipd.qf.Dequeue();
+	queueJob, err := ipd.qf.Dequeue()
 	if errors.Is(err, queue.ErrEmpty) {
-		return nil, ErrEmpty;
+		return nil, ErrEmpty
 	} else if err != nil {
-		return nil, err;
+		return nil, err
 	}
 
 	job := &Job{
-		ID : queueJob.ID,
+		ID:      queueJob.ID,
 		Payload: queueJob.Payload,
 	}
 
-	return job, nil;
+	return job, nil
 }
 
 func (ipd *InProcessDispatcher) Ack(jobId string) error {
-	return ipd.qf.Ack(jobId);
+	return ipd.qf.Ack(jobId)
 }

@@ -25,7 +25,7 @@ func main() {
 
 	fmt.Println("Queue constructed successfully")
 
-	disp := dispatcher.NewInprocessDispatcher(q);
+	disp := dispatcher.NewInprocessDispatcher(q)
 
 	// Enqueue
 	jobId, err := disp.Enqueue("Hello World")
@@ -61,4 +61,3 @@ func main() {
 	}
 
 }
-
