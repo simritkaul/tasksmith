@@ -78,23 +78,25 @@ func (s *Store) CreateJobDefinition(ctx context.Context, name string, cronSchedu
 }
 
 type RunWithConfig struct {
-	RunID           uuid.UUID
-	JobDefinitionID uuid.UUID
-	Config          json.RawMessage
-	MaxAttempts     int
+	RunID              uuid.UUID
+	JobDefinitionID    uuid.UUID
+	Config             json.RawMessage
+	AttemptCount       int
+	MaxAttempts        int
+	BackoffBaseSeconds int
 }
 
 // GetRunConfig gets the latest job details for a given runID
 func (s *Store) GetRunConfig(ctx context.Context, runID uuid.UUID) (RunWithConfig, error) {
 	var rc RunWithConfig
 	err := s.db.QueryRowContext(ctx,
-		`SELECT jr.id, jr.job_definition_id, jd.config, jd.max_attempts
+		`SELECT jr.id, jr.job_definition_id, jd.config, jr.attempt_count, jd.max_attempts, jd.backoff_base_seconds
 		 FROM job_runs jr
 		 JOIN job_definitions jd 
 		 ON jr.job_definition_id = jd.id
 		 WHERE jr.id = $1`,
 		runID,
-	).Scan(&rc.RunID, &rc.JobDefinitionID, &rc.Config, &rc.MaxAttempts)
+	).Scan(&rc.RunID, &rc.JobDefinitionID, &rc.Config, &rc.AttemptCount, &rc.MaxAttempts, &rc.BackoffBaseSeconds)
 	if err != nil {
 		return RunWithConfig{}, fmt.Errorf("get run config: %w", err)
 	}
@@ -110,7 +112,7 @@ func (s *Store) MarkRunStarted(ctx context.Context, runID uuid.UUID) error {
 		 started_at = now(), 
 		 attempt_count = attempt_count + 1, 
 		 next_retry_at = NULL
-		 WHERE id = $1`,
+		 WHERE id = $1 AND status = 'pending'`,
 		runID,
 	)
 
