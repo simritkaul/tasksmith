@@ -86,22 +86,24 @@ func (w *Worker) processOneJob(ctx context.Context) (bool, error) {
 		return true, fmt.Errorf("mark run started: %w", err)
 	}
 
-	if err := w.Task(ctx, config); err != nil {
+	if taskErr := w.Task(ctx, config); taskErr != nil {
 		// Task failed
 		newAttemptCount := rc.AttemptCount + 1
 		if newAttemptCount >= rc.MaxAttempts {
-			if err := w.Store.MarkRunFailedFinal(ctx, runID, err.Error()); err != nil {
+			if err := w.Store.MarkRunFailedFinal(ctx, runID, taskErr.Error()); err != nil {
 				return true, fmt.Errorf("mark run failed: %w", err)
 			}
+			log.Printf("run %s attempt %d: marked final", runID, newAttemptCount)
 
 			if err := w.ack(job.ID); err != nil {
 				return true, err
 			}
 		} else {
 			backoffDuration := w.BackoffFunc(newAttemptCount, rc.BackoffBaseSeconds)
-			if err := w.Store.MarkRunFailedRetrying(ctx, runID, time.Now().Add(backoffDuration), err.Error()); err != nil {
+			if err := w.Store.MarkRunFailedRetrying(ctx, runID, time.Now().Add(backoffDuration), taskErr.Error()); err != nil {
 				return true, fmt.Errorf("mark run retry: %w", err)
 			}
+			log.Printf("run %s attempt %d: retry scheduled", runID, newAttemptCount)
 
 			if err := w.ack(job.ID); err != nil {
 				return true, err
