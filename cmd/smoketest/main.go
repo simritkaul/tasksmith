@@ -3,46 +3,57 @@ package main
 import (
 	"context"
 	"database/sql"
-	"encoding/json"
-	"errors"
 	"fmt"
 	"log"
-	"time"
+	"os"
+	"path/filepath"
 
-	"github.com/google/uuid"
 	_ "github.com/jackc/pgx/v5/stdlib"
 	"github.com/simritkaul/queueforge/queue"
 	"github.com/simritkaul/tasksmith/internal/dispatcher"
-	"github.com/simritkaul/tasksmith/internal/scheduler"
 	"github.com/simritkaul/tasksmith/internal/store"
+	"github.com/simritkaul/tasksmith/internal/worker"
 )
 
 func main() {
 	ctx := context.Background()
 
-	// QueueForge / Dispatcher setup
-	wal, err := queue.OpenWAL("tasksmith.wal")
+	db := mustOpenDB(ctx)
+	defer db.Close()
+
+	// st := store.New(db)
+}
+
+// Fresh WAL + queue per scenario, so scenarios can't see each other's messages.
+func newDispatcher() (dispatcher.Dispatcher, func()) {
+	dir, err := os.MkdirTemp("", "tasksmith-smoke-*")
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	defer wal.Close()
+	wal, err := queue.OpenWAL(filepath.Join(dir, "q.wal"))
+	if err != nil {
+		log.Fatal(err)
+	}
 
 	q, err := queue.NewQueue(wal)
 	if err != nil {
 		log.Fatal(err)
 	}
 
-	disp := dispatcher.NewInprocessDispatcher(q)
+	return dispatcher.NewInprocessDispatcher(q), func() {
+		wal.Close()
+		os.RemoveAll(dir)
+	}
+}
 
-	// Postgres setup
+// Postgres setup
+func mustOpenDB(ctx context.Context) *sql.DB {
 	dsn := "postgres://tasksmith:tasksmith@localhost:5433/tasksmith?sslmode=disable"
 	db, err := sql.Open("pgx", dsn)
 	if err != nil {
 		log.Fatal(err)
 	}
-
-	defer db.Close()
 
 	if err := db.PingContext(ctx); err != nil {
 		log.Fatal("could not reach postgres: ", err)
@@ -50,60 +61,23 @@ func main() {
 
 	fmt.Println("Connected to Postgres")
 
-	st := store.New(db)
-	sch := scheduler.New(st, disp)
+	return db
+}
 
-	// Throwaway Job Definition
-	cfg := json.RawMessage(`{"message": "hello from smoke test"}`)
+// Starts the real worker; the returned func stops it and WAITS for Run to return.
+func startWorker(parent context.Context, st *store.Store, disp dispatcher.Dispatcher) func() {
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan struct{})
 
-	jobDef, err := st.CreateJobDefinition(ctx, "smoketest-job", "* * * * *", cfg)
-	if err != nil {
-		log.Fatal(err)
-	}
+	w := worker.New(disp, st, worker.PlaceholderTask, worker.FixedBackoff)
 
-	fmt.Println("Created Job Definition: ", jobDef.ID)
+	go func() {
+		defer close(done)
+		w.Run(ctx)
+	}()
 
-	// Scheduler create pending run + enqueue
-	run, err := sch.ScheduleRun(ctx, jobDef.ID, time.Now())
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Scheduled run: ", run.ID, "status: ", run.Status)
-
-	// Simulated worker: dequeue, resolve run_id, fetch fresh config
-	job, err := disp.Dequeue()
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Worker dequeued job, payload (run_id): ", job.Payload)
-
-	runID, err := uuid.Parse(job.Payload)
-	if err != nil {
-		log.Fatal("payload was not a valid run ID: ", err)
-	}
-
-	rc, err := st.GetRunConfig(ctx, runID)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Printf("Worker fetched fresh config: %s\n", rc.Config)
-
-	if err := disp.Ack(job.ID); err != nil {
-		log.Fatal(err)
-	}
-
-	fmt.Println("Acked Job: ", job.ID)
-
-	// Confirm queue is now empty
-	_, err = disp.Dequeue()
-	if errors.Is(err, dispatcher.ErrEmpty) {
-		fmt.Println("Queue is empty as expected - smoke test passed!")
-	} else if err != nil {
-		log.Fatal(err)
-	} else {
-		log.Fatal("expected empty queue but found a job")
+	return func() {
+		cancel()
+		<-done
 	}
 }
